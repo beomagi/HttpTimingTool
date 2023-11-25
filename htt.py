@@ -59,7 +59,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if "CMD" in jrequest:
             if jrequest["CMD"]=="TimeTool":
                 clientip,clientport=self.client_address
-                if jrequest["Stage"]=="0":
+                if jrequest["Step"]=="0":
                     svrtime=time.time()
                     sresponse={
                         "ClientIPatServer":str(clientip),
@@ -100,23 +100,31 @@ def client_setup():
 
 def AddTime(tkey,obj,tval):
     #does not need to return, dict passes by reference!
-    idx=int(obj.get("Stage"))
-    if idx>=timecounts:
-        obj[tkey]=obj[tkey].pop(0) #drop first in list
-        obj[tkey].append(tval)
-    else:
-        obj[tkey][idx]=tval
+    obj["Timing"][tkey].append(tval)    
+    if len(obj["Timing"][tkey])>timecounts:
+        obj["Timing"][tkey].pop(0) #drop first in list
     return
 
 
-def TimeMeasurement(service,tdata):
+def TimeMeasurement(service,xtdata):
+    tdata={}
+    #dont sent everything, just enough to get server time
+    for keys in ["CMD","Step","Client"]:
+        tdata[keys]=xtdata[keys]    
     encoded_data = json.dumps(tdata).encode('utf-8')
     with urllib.request.urlopen(service, data=encoded_data) as response:
         if response.getcode()==200:
+            clientRestResvTime=time.time()
             responsedata=response.read().decode('utf-8')
             jresponsedata=json.loads(responsedata)
-            AddTime("ServerRspSentTimes",tdata,jresponsedata["ServerTime"])
-            AddTime("ClientRspResvTimes",tdata,time.time())
+            svrtime=jresponsedata["ServerTime"]
+            idx=min(int(xtdata["Step"]),timecounts-1)
+            AddTime("ClientRspResvTimes",xtdata,clientRestResvTime)
+            AddTime("ServerRspSentTimes",xtdata,svrtime)
+            print(json.dumps(xtdata,indent=" "))
+            AddTime("ServerTimeOffset",xtdata,float(svrtime)-float(xtdata["Timing"]["ServerTimeEstimate"][idx]))
+            AddTime("NetworkLatency",xtdata,float(clientRestResvTime)-float(xtdata["Timing"]["ClientReqSentTimes"][idx]))
+            xtdata["Step"]=str(int(xtdata["Step"])+1)
 
 def ServerArchiveUpdate(service,tdata):
     tdata["CMD"]="Archive"
@@ -126,6 +134,27 @@ def ServerArchiveUpdate(service,tdata):
             responsedata=response.read().decode('utf-8')
             jresponsedata=json.loads(responsedata)
 
+def calcoffset(tdata):
+    track=[]
+    idx=1
+    for vals in tdata["Timing"]["ServerTimeEstimate"]:
+        tguess=float(tdata["Timing"]["ServerTimeEstimate"][-idx])
+        tactual=float(tdata["Timing"]["ServerRspSentTimes"][-idx])
+        toffset=float(tdata["Timing"]["EstimatedOffset"][-idx])
+        nextoffset=toffset+(tactual-tguess)
+        track.append(nextoffset)
+        idx=idx+1
+    #track has last data first.
+    weight=timecounts+1
+    runningsum=0
+    runningweight=0
+    for offsets in track:
+        runningsum+=offsets*weight
+        runningweight+=weight
+        weight-=1
+    weightedoffset=runningsum/runningweight
+    return weightedoffset
+
 
 def client_requests(clnt,port):
     clientkeyname=client_setup()
@@ -133,15 +162,36 @@ def client_requests(clnt,port):
     tdata = {
         "CMD":"TimeTool",
         "Client": clientkeyname,
-        "ClientReqSentTimes": [0]*timecounts,
-        "ServerRspSentTimes": [0]*timecounts,
-        "ClientRspResvTimes": [0]*timecounts,
-        "Stage": "0"
+        "Timing" :{
+            "ClientReqSentTimes": [], #Client's local time at the point of sending
+            "ServerTimeEstimate": [], #Client's estimate of server time. Initial matches client
+            "EstimatedOffset": [], #Client's estimate of server time. Initial matches client
+            "ServerRspSentTimes": [], #Time server responds with
+            "ServerTimeOffset": [],   #Calculated offset of estimate vs server's time
+            "ClientRspResvTimes": [], #Time the client gets the server's response
+            "NetworkLatency": [],     #time from client sending req and getting resp
+        },
+        "Step": "0"
         }
-    AddTime("ClientReqSentTimes",tdata,time.time())
-    TimeMeasurement(service,tdata)
-    ServerArchiveUpdate(service,tdata)
-    print(json.dumps(tdata,indent="  "))
+    Step=0
+    while True:
+        now=time.time()
+        AddTime("ClientReqSentTimes",tdata,now)
+        if Step>0:
+            eoffset=calcoffset(tdata)
+            AddTime("ServerTimeEstimate",tdata,now+eoffset)
+            AddTime("EstimatedOffset",tdata,eoffset)
+        else:
+            AddTime("ServerTimeEstimate",tdata,now)
+            AddTime("EstimatedOffset",tdata,0)
+
+        TimeMeasurement(service,tdata)
+        ServerArchiveUpdate(service,tdata)
+        
+        print(json.dumps(tdata,indent="  "))
+        print("---------------")
+        time.sleep(0.5)
+        Step+=1
 
        
 
