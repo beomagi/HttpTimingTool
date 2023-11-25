@@ -151,10 +151,18 @@ def calcoffset(tdata):
     for offsets in track:
         runningsum+=offsets*weight
         runningweight+=weight
-        weight-=1
+        #weight-=1
+        weight=weight*0.8
     weightedoffset=runningsum/runningweight
     return weightedoffset
 
+def AddAverageServerTimeOffset(tdata):
+    newra=[]
+    for vals in tdata["Timing"]["ServerTimeOffset"]:
+        newra.append(float(vals))
+    avg=sum(newra)/len(newra)
+    tdata["AverageServerTimeOffset"]=avg
+    
 
 def client_requests(clnt,port):
     clientkeyname=client_setup()
@@ -186,6 +194,7 @@ def client_requests(clnt,port):
             AddTime("EstimatedOffset",tdata,0)
 
         TimeMeasurement(service,tdata)
+        AddAverageServerTimeOffset(tdata)
         ServerArchiveUpdate(service,tdata)
         
         print(json.dumps(tdata,indent="  "))
