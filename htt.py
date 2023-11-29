@@ -96,7 +96,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 clientip,clientport=self.client_address
                 fname=(jrequest["Client"].replace(".","_"))+"_"+".txt"
                 print("Spawning Data")
-                onemillionbytes=str(list(range(100000,225000)))
+                onemillionbytes=str(list(range(1000000,2250000)))
                 sresponse={
                     "ClientIPatServer":str(clientip),
                     "ServerReady":True
