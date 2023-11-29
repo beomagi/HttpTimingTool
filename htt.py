@@ -264,8 +264,8 @@ def client_bandwidthtest(clnt,port):
         datalen=sys.getsizeof(responsedata)
         timetaken=time_end-time_start
         bandwidth=(round((datalen/timetaken)/(1024*1024),3))
-        print("1M byte transfer bandwidth - {}MBps".format(bandwidth))
-        time.sleep(0.5)
+        print("{} byte transfer bandwidth - {}MBps".format(datalen,bandwidth))
+        time.sleep(1)
     
 
 
