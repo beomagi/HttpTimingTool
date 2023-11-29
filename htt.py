@@ -12,8 +12,23 @@ import hashlib
 serverqueryarchive={}
 timecounts=10
 
+
+onemillionbytes=""
+
+def createBigfile(fname):
+    with open(fname,"w") as fh:
+        onemillionbytes=str(list(range(100000,225000)))
+        fh.write(onemillionbytes)
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     '''   use our own handlers functions '''
+
+    def sendbininfo(self, code, fdata):
+        self.send_response(code)
+        self.send_header('Content-type', 'application/octet-stream')
+        self.end_headers()
+        self.wfile.write(fdata.encode())
 
     def sendtextinfo(self, code, text):
         self.send_response(code)
@@ -41,6 +56,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         '''   handle post like rest API   '''
+        global onemillionbytes
         try: #try getting the bytestream of the request
             content_length = int(self.headers['Content-Length'])
         except Exception as err:
@@ -59,14 +75,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if "CMD" in jrequest:
             if jrequest["CMD"]=="TimeTool":
                 clientip,clientport=self.client_address
-                if jrequest["Step"]=="0":
-                    svrtime=time.time()
-                    sresponse={
-                        "ClientIPatServer":str(clientip),
-                        "ServerTime":str(svrtime)
-                    }
-                    self.sendtextinfo(200,json.dumps(sresponse))
-                    return
+                svrtime=time.time()
+                sresponse={
+                    "ClientIPatServer":str(clientip),
+                    "ServerTime":str(svrtime)
+                }
+                self.sendtextinfo(200,json.dumps(sresponse))
+                return
             if jrequest["CMD"]=="Archive":
                 clientip,clientport=self.client_address
                 serverqueryarchive[jrequest["Client"]]=jrequest
@@ -77,7 +92,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 }
                 self.sendtextinfo(200,json.dumps(sresponse))
                 return
-                    
+            if jrequest["CMD"]=="BWTest":
+                clientip,clientport=self.client_address
+                fname=(jrequest["Client"].replace(".","_"))+"_"+".txt"
+                print("Spawning Data")
+                onemillionbytes=str(list(range(100000,225000)))
+                sresponse={
+                    "ClientIPatServer":str(clientip),
+                    "ServerReady":True
+                }
+                self.sendtextinfo(200,json.dumps(sresponse))
+                return
+            if jrequest["CMD"]=="BWTestP2":
+                clientip,clientport=self.client_address
+                self.sendbininfo(200,onemillionbytes)
+                return
                     
         print(jrequest)
         self.sendtextinfo(200,"No operation for your request: {}".format(rawrequest))
@@ -110,12 +139,14 @@ def TimeMeasurement(service,xtdata):
     tdata={}
     #dont sent everything, just enough to get server time
     for keys in ["CMD","Step","Client"]:
-        tdata[keys]=xtdata[keys]    
+        tdata[keys]=xtdata[keys]
+    tdata["CMD"]="TimeTool"
     encoded_data = json.dumps(tdata).encode('utf-8')
     with urllib.request.urlopen(service, data=encoded_data) as response:
         if response.getcode()==200:
             clientRestResvTime=time.time()
             responsedata=response.read().decode('utf-8')
+            print(responsedata)
             jresponsedata=json.loads(responsedata)
             svrtime=jresponsedata["ServerTime"]
             idx=min(int(xtdata["Step"]),timecounts-1)
@@ -192,7 +223,7 @@ def client_requests(clnt,port):
         else:
             AddTime("ServerTimeEstimate",tdata,now)
             AddTime("EstimatedOffset",tdata,0)
-
+        
         TimeMeasurement(service,tdata)
         AddAverageServerTimeOffset(tdata)
         ServerArchiveUpdate(service,tdata)
@@ -202,14 +233,51 @@ def client_requests(clnt,port):
         time.sleep(0.5)
         Step+=1
 
-       
+def client_bandwidthtest(clnt,port):
+    clientkeyname=client_setup()
+    service = "http://"+clnt+":"+port
+    tdata = {
+        "CMD":"BWTest",
+        "Client": clientkeyname,
+        }
+    encoded_data = json.dumps(tdata).encode('utf-8')
+    with urllib.request.urlopen(service, data=encoded_data) as response:
+        if response.getcode()==200:
+            responsedata=response.read().decode('utf-8')
+            jresponsedata=json.loads(responsedata)
+    print(jresponsedata)
+    if "ServerReady" not in jresponsedata:
+        print("Error: Server not ready for bandwidth test")
+        return
+    tdata = {
+        "CMD":"BWTestP2",
+        "Client": clientkeyname,
+        }
+    encoded_data = json.dumps(tdata).encode('utf-8')
+
+    while True:
+        time_start=time.time()
+        with urllib.request.urlopen(service, data=encoded_data) as response:
+            if response.getcode()==200:
+                responsedata=response.read()
+        time_end=time.time()
+        datalen=len(responsedata)
+        timetaken=time_end-time_start
+        bandwidth=(round((datalen/timetaken)/(1024*1024),3))
+        print("1M byte transfer bandwidth - {}MBps".format(bandwidth))
+        time.sleep(0.5)
+    
+
+
 
 if __name__=="__main__":
     args=sys.argv
     port=None
     clnt=None
+    bandwidthtest=False
     if "-p" in args: port=args[args.index("-p")+1]
     if "-c" in args: clnt=args[args.index("-c")+1] #client of ...
+    if "-b" in args: bandwidthtest=True #Do bandwidth test against client
         
     helptext = f"Usage:\nserver -> {args[0]} -p [port]\nclient -> {args[0]} -p [port] -c [serverip]\n"
     if (port==None):
@@ -226,5 +294,8 @@ if __name__=="__main__":
         except KeyboardInterrupt:
             print("Server Stopped")
     else: # else run in client mode
-        client_requests(clnt,port)
+        if not bandwidthtest:
+            client_requests(clnt,port)
+        else:
+            client_bandwidthtest(clnt,port)
         
